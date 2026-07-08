@@ -6,6 +6,9 @@ import argparse
 import numpy as np
 import torch.nn as nn
 
+CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'modelconf')
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
+
 def parse_configure(model=None, dataset=None):
     parser = argparse.ArgumentParser(description='RLMRec')
     parser.add_argument('--model', type=str, default='LightGCN', help='Model name')
@@ -33,13 +36,12 @@ def parse_configure(model=None, dataset=None):
         args.dataset = dataset
 
     # find yml file
-    if not os.path.exists('/home/wy/code/RLMRec_test/code/encoder/config/modelconf/{}.yml'.format(model_name)):
-    # if not os.path.exists('config/modelconf/{}.yml'.format(model_name)):
+    model_config_path = os.path.join(CONFIG_DIR, '{}.yml'.format(model_name))
+    if not os.path.exists(model_config_path):
         raise Exception("Please create the yaml file for your model first.")
 
     # read yml file
-    with open('/home/wy/code/RLMRec_test/code/encoder/config/modelconf/{}.yml'.format(model_name), encoding='utf-8') as f:
-    # with open('config/modelconf/{}.yml'.format(model_name), encoding='utf-8') as f:
+    with open(model_config_path, encoding='utf-8') as f:
         config_data = f.read()
         configs = yaml.safe_load(config_data)
         configs['model']['name'] = configs['model']['name'].lower()
@@ -52,16 +54,17 @@ def parse_configure(model=None, dataset=None):
             configs['train']['seed'] = args.seed
 
         # semantic embeddings
-        usrprf_embeds_path = "/home/wy/code/RLMRec_test/data/{}/usr_emb_np.pkl".format(configs['data']['name'])
-        itmprf_embeds_path = "/home/wy/code/RLMRec_test/data/{}/itm_emb_np.pkl".format(configs['data']['name'])
+        data_dir = os.path.join(DATA_DIR, configs['data']['name'])
+        usrprf_embeds_path = os.path.join(data_dir, 'usr_emb_np.pkl')
+        itmprf_embeds_path = os.path.join(data_dir, 'itm_emb_np.pkl')
         with open(usrprf_embeds_path, 'rb') as f:
             configs['usrprf_embeds'] = pickle.load(f)
         with open(itmprf_embeds_path, 'rb') as f:
             configs['itmprf_embeds'] = pickle.load(f)
         #
         # # intent embeddings
-        usrint_embeds_path = "/home/wy/code/RLMRec_test/data/{}/user_intent_emb_3.pkl".format(configs['data']['name'])
-        itmint_embeds_path = "/home/wy/code/RLMRec_test/data/{}/item_intent_emb_3.pkl".format(configs['data']['name'])
+        usrint_embeds_path = os.path.join(data_dir, 'user_intent_emb_3.pkl')
+        itmint_embeds_path = os.path.join(data_dir, 'item_intent_emb_3.pkl')
         with open(usrint_embeds_path, 'rb') as f:
             configs['usrint_embeds'] = pickle.load(f)
         with open(itmint_embeds_path, 'rb') as f:

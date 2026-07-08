@@ -1,3 +1,4 @@
+import os
 import pickle
 import numpy as np
 from scipy.sparse import csr_matrix, coo_matrix, dok_matrix
@@ -7,22 +8,24 @@ from data_utils.datasets_general_cf import PairwiseTrnData, PairwiseWEpochFlagTr
 import torch as t
 import torch.utils.data as data
 
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
+
 
 class DataHandlerGeneralCF:
     def __init__(self):
         if configs['data']['name'] == 'amazon':
-            predir = '/home/wy/code/RLMRec_test/data/amazon/'
+            predir = os.path.join(DATA_DIR, 'amazon')
         elif configs['data']['name'] == 'yelp':
-            predir = '/home/wy/code/RLMRec_test/data/yelp/'
+            predir = os.path.join(DATA_DIR, 'yelp')
         elif configs['data']['name'] == 'steam':
-            predir = '/home/wy/code/RLMRec_test/data/steam/'
+            predir = os.path.join(DATA_DIR, 'steam')
         elif configs['data']['name'] == 'movie':
-            predir = '/home/wy/code/RLMRec_test/data/movie/'
+            predir = os.path.join(DATA_DIR, 'movie')
         else:
             raise NotImplementedError
-        self.trn_file = predir + 'trn_mat.pkl'
-        self.val_file = predir + 'val_mat.pkl'
-        self.tst_file = predir + 'tst_mat.pkl'
+        self.trn_file = os.path.join(predir, 'trn_mat.pkl')
+        self.val_file = os.path.join(predir, 'val_mat.pkl')
+        self.tst_file = os.path.join(predir, 'tst_mat.pkl')
 
     def _load_one_mat(self, file):
         """Load one single adjacent matrix from file
