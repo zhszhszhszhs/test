@@ -41,6 +41,8 @@ class DCCF_int(BaseModel):
         self.reg_weight = self.hyper_config['reg_weight']
         self.cl_weight = self.hyper_config['cl_weight']
         self.cl_temperature = self.hyper_config['cl_temperature']
+        self.hyper_cl_weight = self.hyper_config['hyper_cl_weight'] if 'hyper_cl_weight' in self.hyper_config else self.cl_weight
+        self.hyper_cl_temperature = self.hyper_config['hyper_cl_temperature'] if 'hyper_cl_temperature' in self.hyper_config else self.cl_temperature
         self.kd_weight = self.hyper_config['kd_weight']
         self.kd_temperature = self.hyper_config['kd_temperature']
         self.kd_int_weight = self.hyper_config['kd_int_weight']
@@ -194,6 +196,19 @@ class DCCF_int(BaseModel):
             cl_loss += cal_infonce_loss(i_gnn_embs, i_iaa_embs, i_iaa_embs, self.cl_temperature) / u_gnn_embs.shape[0]
         return cl_loss
 
+    def _cal_hyper_cl_loss(self, users, pos_items, neg_items, hyper_emb):
+        hyper_cl_loss = 0.0
+        for i in range(len(hyper_emb)):
+            u_hyper_embs, i_hyper_embs = torch.split(hyper_emb[i], [self.user_num, self.item_num], 0)
+            anc_hyper_embs = u_hyper_embs[users]
+            pos_hyper_embs = i_hyper_embs[pos_items]
+            neg_hyper_embs = i_hyper_embs[neg_items]
+            if neg_hyper_embs.dim() > 2:
+                neg_hyper_embs = neg_hyper_embs.reshape(-1, neg_hyper_embs.shape[-1])
+            all_hyper_item_embs = torch.cat([pos_hyper_embs, neg_hyper_embs], dim=0)
+            hyper_cl_loss += cal_infonce_loss(anc_hyper_embs, pos_hyper_embs, all_hyper_item_embs, self.hyper_cl_temperature) / anc_hyper_embs.shape[0]
+        return hyper_cl_loss
+
     def cal_loss(self, batch_data):
         self.is_training = True
         user_embeds, item_embeds, gnn_embeds, int_embeds, hyper_embeds, iaa_embeds = self.forward()
@@ -204,6 +219,7 @@ class DCCF_int(BaseModel):
         bpr_loss = cal_bpr_loss(anc_embeds, pos_embeds, neg_embeds) / anc_embeds.shape[0]
         reg_loss = self.reg_weight * reg_params(self)
         cl_loss = self.cl_weight * self._cal_cl_loss(ancs, poss, gnn_embeds, int_embeds, iaa_embeds)
+        hyper_cl_loss = self.hyper_cl_weight * self._cal_hyper_cl_loss(ancs, poss, negs, hyper_embeds)
 
         # kd_loss
         user_intent_embeds = self.kd_mlp(self.usrint_embeds)
@@ -228,8 +244,8 @@ class DCCF_int(BaseModel):
         kd_int_loss /= anc_int_embeds.shape[0]
         kd_int_loss *= self.kd_int_weight
 
-        loss = bpr_loss + reg_loss + cl_loss + kd_loss + kd_int_loss
-        losses = {'bpr_loss': bpr_loss, 'reg_loss': reg_loss, 'cl_loss': cl_loss, 'kd_loss': kd_loss, 'kd_int_loss': kd_int_loss}
+        loss = bpr_loss + reg_loss + cl_loss + hyper_cl_loss + kd_loss + kd_int_loss
+        losses = {'bpr_loss': bpr_loss, 'reg_loss': reg_loss, 'cl_loss': cl_loss, 'hyper_cl_loss': hyper_cl_loss, 'kd_loss': kd_loss, 'kd_int_loss': kd_int_loss}
         return loss, losses
 
     def full_predict(self, batch_data):
