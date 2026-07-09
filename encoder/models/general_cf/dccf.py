@@ -1,3 +1,5 @@
+import os
+import time
 import torch
 import numpy as np
 import torch_sparse
@@ -153,6 +155,61 @@ class DCCF(BaseModel):
         loss = bpr_loss + reg_loss + cl_loss
         losses = {'bpr_loss': bpr_loss, 'reg_loss': reg_loss, 'cl_loss': cl_loss}
         return loss, losses
+
+    def _save_numpy(self, save_dir, file_name, embeds):
+        np.save(os.path.join(save_dir, file_name), embeds.detach().cpu().numpy())
+
+    def _save_layer_embeds(self, save_dir, prefix, embeds):
+        layer_embeds = torch.stack(embeds, dim=0)
+        mean_embeds = torch.mean(layer_embeds, dim=0)
+        user_embeds, item_embeds = torch.split(mean_embeds, [self.user_num, self.item_num], 0)
+        self._save_numpy(save_dir, '{}_layers.npy'.format(prefix), layer_embeds)
+        self._save_numpy(save_dir, '{}_user_embeds.npy'.format(prefix), user_embeds)
+        self._save_numpy(save_dir, '{}_item_embeds.npy'.format(prefix), item_embeds)
+
+    def save_analysis_embeddings(self, best_epoch=None, test_result=None):
+        save_root = os.path.join(os.path.dirname(__file__), '..', '..', 'analysis', configs['model']['name'])
+        save_name = '{}_seed{}_best_final_test_{}'.format(configs['data']['name'], configs['train']['seed'], time.strftime('%Y%m%d_%H%M%S'))
+        save_dir = os.path.abspath(os.path.join(save_root, save_name))
+        os.makedirs(save_dir, exist_ok=True)
+
+        was_training = self.is_training
+        was_module_training = self.training
+        cached_final_embeds = self.final_embeds
+        try:
+            self.eval()
+            self.is_training = True
+            self.final_embeds = None
+            with torch.no_grad():
+                user_embeds, item_embeds, gnn_embeds, int_embeds, gaa_embeds, iaa_embeds = self.forward()
+                self._save_numpy(save_dir, 'final_user_embeds.npy', user_embeds)
+                self._save_numpy(save_dir, 'final_item_embeds.npy', item_embeds)
+                self._save_layer_embeds(save_dir, 'gnn', gnn_embeds)
+                self._save_layer_embeds(save_dir, 'gaa', gaa_embeds)
+                self._save_layer_embeds(save_dir, 'iaa', iaa_embeds)
+        finally:
+            self.is_training = was_training
+            self.final_embeds = cached_final_embeds
+            if was_module_training:
+                self.train()
+            else:
+                self.eval()
+
+        with open(os.path.join(save_dir, 'metadata.txt'), 'w', encoding='utf-8') as f:
+            f.write('save_stage: best_final_test\n')
+            f.write('model: {}\n'.format(configs['model']['name']))
+            f.write('dataset: {}\n'.format(configs['data']['name']))
+            f.write('seed: {}\n'.format(configs['train']['seed']))
+            if best_epoch is not None:
+                f.write('best_epoch: {}\n'.format(best_epoch))
+            f.write('user_num: {}\n'.format(self.user_num))
+            f.write('item_num: {}\n'.format(self.item_num))
+            f.write('embedding_size: {}\n'.format(self.embedding_size))
+            f.write('layer_num: {}\n'.format(self.layer_num))
+            if test_result is not None:
+                f.write('test_result: {}\n'.format(test_result))
+
+        return save_dir
 
     def full_predict(self, batch_data):
         user_embeds, item_embeds, _, _, _, _ = self.forward()

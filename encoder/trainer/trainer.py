@@ -102,6 +102,9 @@ class Trainer(object):
         model = build_model(self.data_handler).to(configs['device'])
         model.load_state_dict(best_state_dict)
         test_result = self.test(model)
+        if hasattr(model, 'save_analysis_embeddings'):
+            save_dir = model.save_analysis_embeddings(best_epoch=best_epoch, test_result=test_result)
+            self.logger.log("Save best final-test analysis embeddings to {}.".format(save_dir))
 
         # test_result_1 = self.sparse_test(model, self.data_handler.test_dataloader_1)
         # self.logger.log("Best Epoch {}. Final test result: {}.".format(best_epoch, test_result_1))
@@ -223,6 +226,5 @@ class AutoCFTrainer(Trainer):
             self.logger.log_loss(epoch_idx, loss_log_dict)
         else:
             self.logger.log_loss(epoch_idx, loss_log_dict, save_to_log=False)
-
 
 
