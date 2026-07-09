@@ -37,6 +37,7 @@ model:
   kd_int_weight: 1.0e-2
   kd_temperature: 0.5
   kd_int_temperature: 0.2
+  hyper_weight: 1.0
   # for amazon
   amazon:
     layer_num: 2
@@ -49,6 +50,7 @@ model:
     kd_int_temperature: 0.1
     kd_int_weight_2: 5.0e-4
     kd_int_weight_3: 1.0e-4
+    hyper_weight: 1.0
   # for yelp
   yelp:
     layer_num: 2
@@ -61,6 +63,7 @@ model:
     kd_int_temperature: 0.2
     kd_int_weight_2: 1.0e-3
     kd_int_weight_3: 1.0e-4
+    hyper_weight: 1.0
   # for movie
   movie:
     layer_num: 3
@@ -73,4 +76,4 @@ model:
     kd_int_temperature: 0.2
     kd_int_weight_2: 1.0e-3
     kd_int_weight_3: 1.0e-4
-
+    hyper_weight: 1.0

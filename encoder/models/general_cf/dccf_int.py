@@ -1,3 +1,4 @@
+import os
 import torch
 import pickle
 import numpy as np
@@ -34,6 +35,8 @@ class DCCF_int(BaseModel):
 
         # hyper-parameter
         self.intent_num = configs['model']['intent_num']
+        self.intent_temperature = self.hyper_config['intent_temperature'] if 'intent_temperature' in self.hyper_config else 1.0
+        self.hyper_weight = self.hyper_config['hyper_weight'] if 'hyper_weight' in self.hyper_config else 1.0
         self.layer_num = self.hyper_config['layer_num']
         self.reg_weight = self.hyper_config['reg_weight']
         self.cl_weight = self.hyper_config['cl_weight']
@@ -48,6 +51,8 @@ class DCCF_int(BaseModel):
         self.item_embeds = nn.Embedding(self.item_num, self.embedding_size)
         self.user_intent = torch.nn.Parameter(init(torch.empty(self.embedding_size, self.intent_num)), requires_grad=True)
         self.item_intent = torch.nn.Parameter(init(torch.empty(self.embedding_size, self.intent_num)), requires_grad=True)
+        self.user_hyper_embeds = nn.Embedding(self.user_num, self.embedding_size)
+        self.item_hyper_embeds = nn.Embedding(self.item_num, self.embedding_size)
 
         # train/test
         self.is_training = True
@@ -83,6 +88,8 @@ class DCCF_int(BaseModel):
                 init(m.weight)
         init(self.user_embeds.weight)
         init(self.item_embeds.weight)
+        init(self.user_hyper_embeds.weight)
+        init(self.item_hyper_embeds.weight)
 
     def _cal_sparse_adj(self):
         A_values = torch.ones(size=(len(self.all_h_list), 1)).view(-1).cuda()
@@ -102,12 +109,21 @@ class DCCF_int(BaseModel):
         G_values = D_scores_inv[self.all_h_list] * edge_alpha
         return G_indices, G_values
 
+    def _build_interaction_intent_hypergraph(self, lightgcn_embeds, intent_prototypes):
+        return torch.softmax((lightgcn_embeds @ intent_prototypes) / self.intent_temperature, dim=1)
+
+    def _interaction_intent_hypergraph_conv(self, node_embeds, hyper_adj):
+        hyperedge_embeds = F.leaky_relu(hyper_adj.T @ node_embeds)
+        hypernode_embeds = F.leaky_relu(hyper_adj @ hyperedge_embeds)
+        return hypernode_embeds
+
     def forward(self):
         if not self.is_training and self.final_embeds is not None:
-            return self.final_embeds[:self.user_num], self.final_embeds[self.user_num:], None, None, None
+            return self.final_embeds[:self.user_num], self.final_embeds[self.user_num:], None, None, None, None
 
         all_embeds = [torch.concat([self.user_embeds.weight, self.item_embeds.weight], dim=0)]
-        gnn_embeds, int_embeds, iaa_embeds = [], [], []
+        hyper_all_embeds = [torch.concat([self.user_hyper_embeds.weight, self.item_hyper_embeds.weight], dim=0)]
+        gnn_embeds, int_embeds, hyper_embeds, iaa_embeds = [], [], [], []
 
         for i in range(0, self.layer_num):
             # Graph-based Message Passing
@@ -119,6 +135,15 @@ class DCCF_int(BaseModel):
             i_int_embeds = torch.softmax(i_embeds @ self.item_intent, dim=1) @ self.item_intent.T
             int_layer_embeds = torch.concat([u_int_embeds, i_int_embeds], dim=0)
 
+            # Interaction Intent Hypergraph Convolution
+            u_gnn_embeds, i_gnn_embeds = torch.split(gnn_layer_embeds, [self.user_num, self.item_num], 0)
+            u_hyper_embeds, i_hyper_embeds = torch.split(hyper_all_embeds[i], [self.user_num, self.item_num], 0)
+            u_hyper_adj = self._build_interaction_intent_hypergraph(u_gnn_embeds, self.user_intent)
+            i_hyper_adj = self._build_interaction_intent_hypergraph(i_gnn_embeds, self.item_intent)
+            u_hyper_layer_embeds = self._interaction_intent_hypergraph_conv(u_hyper_embeds, u_hyper_adj)
+            i_hyper_layer_embeds = self._interaction_intent_hypergraph_conv(i_hyper_embeds, i_hyper_adj)
+            hyper_layer_embeds = torch.concat([u_hyper_layer_embeds, i_hyper_layer_embeds], dim=0)
+
             # Adaptive Augmentation
             int_head_embeds = torch.index_select(int_layer_embeds, 0, self.all_h_list)
             int_tail_embeds = torch.index_select(int_layer_embeds, 0, self.all_t_list)
@@ -128,14 +153,16 @@ class DCCF_int(BaseModel):
             # Aggregation
             gnn_embeds.append(gnn_layer_embeds)
             int_embeds.append(int_layer_embeds)
+            hyper_embeds.append(hyper_layer_embeds)
             iaa_embeds.append(iaa_layer_embeds)
-            all_embeds.append(gnn_layer_embeds + int_layer_embeds + iaa_layer_embeds + all_embeds[i])
+            hyper_all_embeds.append(hyper_layer_embeds + hyper_all_embeds[i])
+            all_embeds.append(gnn_layer_embeds + int_layer_embeds + self.hyper_weight * hyper_layer_embeds + iaa_layer_embeds + all_embeds[i])
 
         all_embeds = torch.stack(all_embeds, dim=1)
         all_embeds = torch.sum(all_embeds, dim=1, keepdim=False)
         user_embeds, item_embeds = torch.split(all_embeds, [self.user_num, self.item_num], 0)
         self.final_embeds = all_embeds
-        return user_embeds, item_embeds, gnn_embeds, int_embeds, iaa_embeds
+        return user_embeds, item_embeds, gnn_embeds, int_embeds, hyper_embeds, iaa_embeds
 
     def _pick_embeds(self, user_embeds, item_embeds, batch_data):
         ancs, poss, negs = batch_data
@@ -169,7 +196,7 @@ class DCCF_int(BaseModel):
 
     def cal_loss(self, batch_data):
         self.is_training = True
-        user_embeds, item_embeds, gnn_embeds, int_embeds, iaa_embeds = self.forward()
+        user_embeds, item_embeds, gnn_embeds, int_embeds, hyper_embeds, iaa_embeds = self.forward()
         ancs, poss, negs = batch_data
         anc_embeds = user_embeds[ancs]
         pos_embeds = item_embeds[poss]
@@ -206,7 +233,7 @@ class DCCF_int(BaseModel):
         return loss, losses
 
     def full_predict(self, batch_data):
-        user_embeds, item_embeds, _, _, _ = self.forward()
+        user_embeds, item_embeds, _, _, _, _ = self.forward()
         self.is_training = False
         pck_users, train_mask = batch_data
         pck_users = pck_users.long()
