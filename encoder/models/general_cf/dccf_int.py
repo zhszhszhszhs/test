@@ -8,7 +8,6 @@ import torch.nn.functional as F
 
 from config.configurator import configs
 from models.general_cf.lightgcn import BaseModel
-from models.general_cf.moe import MoE
 from models.loss_utils import cal_bpr_loss, reg_params, cal_infonce_loss
 
 init = nn.init.xavier_uniform_
@@ -54,19 +53,15 @@ class DCCF_int(BaseModel):
         self.is_training = True
         self.final_embeds = False
 
-        # side information
-        self.usrprf_embeds = torch.tensor(configs['usrprf_embeds']).float().cuda()
-        self.itmprf_embeds = torch.tensor(configs['itmprf_embeds']).float().cuda()
-        self.mlp = nn.Sequential(
-            nn.Linear(self.usrprf_embeds.shape[1], (self.usrprf_embeds.shape[1] + self.embedding_size) // 2),
-            nn.LeakyReLU(),
-            nn.Linear((self.usrprf_embeds.shape[1] + self.embedding_size) // 2, self.embedding_size)
-        )
-
         # intent information
         self.usrint_embeds = torch.tensor(configs['usrint_embeds']).float().cuda()
         self.itmint_embeds = torch.tensor(configs['itmint_embeds']).float().cuda()
         self.int_mlp = nn.Sequential(
+            nn.Linear(self.usrint_embeds.shape[1], (self.usrint_embeds.shape[1] + self.embedding_size) // 2),
+            nn.LeakyReLU(),
+            nn.Linear((self.usrint_embeds.shape[1] + self.embedding_size) // 2, self.embedding_size)
+        )
+        self.kd_mlp = nn.Sequential(
             nn.Linear(self.usrint_embeds.shape[1], (self.usrint_embeds.shape[1] + self.embedding_size) // 2),
             nn.LeakyReLU(),
             nn.Linear((self.usrint_embeds.shape[1] + self.embedding_size) // 2, self.embedding_size)
@@ -80,10 +75,10 @@ class DCCF_int(BaseModel):
         self._init_weight()
 
     def _init_weight(self):
-        for m in self.mlp:
+        for m in self.int_mlp:
             if isinstance(m, nn.Linear):
                 init(m.weight)
-        for m in self.int_mlp:
+        for m in self.kd_mlp:
             if isinstance(m, nn.Linear):
                 init(m.weight)
         init(self.user_embeds.weight)
@@ -109,10 +104,10 @@ class DCCF_int(BaseModel):
 
     def forward(self):
         if not self.is_training and self.final_embeds is not None:
-            return self.final_embeds[:self.user_num], self.final_embeds[self.user_num:], None, None, None, None
+            return self.final_embeds[:self.user_num], self.final_embeds[self.user_num:], None, None, None
 
         all_embeds = [torch.concat([self.user_embeds.weight, self.item_embeds.weight], dim=0)]
-        gnn_embeds, int_embeds, gaa_embeds, iaa_embeds = [], [], [], []
+        gnn_embeds, int_embeds, iaa_embeds = [], [], []
 
         for i in range(0, self.layer_num):
             # Graph-based Message Passing
@@ -125,27 +120,22 @@ class DCCF_int(BaseModel):
             int_layer_embeds = torch.concat([u_int_embeds, i_int_embeds], dim=0)
 
             # Adaptive Augmentation
-            gnn_head_embeds = torch.index_select(gnn_layer_embeds, 0, self.all_h_list)
-            gnn_tail_embeds = torch.index_select(gnn_layer_embeds, 0, self.all_t_list)
             int_head_embeds = torch.index_select(int_layer_embeds, 0, self.all_h_list)
             int_tail_embeds = torch.index_select(int_layer_embeds, 0, self.all_t_list)
-            G_graph_indices, G_graph_values = self._adaptive_mask(gnn_head_embeds, gnn_tail_embeds)
             G_inten_indices, G_inten_values = self._adaptive_mask(int_head_embeds, int_tail_embeds)
-            gaa_layer_embeds = torch_sparse.spmm(G_graph_indices, G_graph_values, self.A_in_shape[0], self.A_in_shape[1], all_embeds[i])
             iaa_layer_embeds = torch_sparse.spmm(G_inten_indices, G_inten_values, self.A_in_shape[0], self.A_in_shape[1], all_embeds[i])
 
             # Aggregation
             gnn_embeds.append(gnn_layer_embeds)
             int_embeds.append(int_layer_embeds)
-            gaa_embeds.append(gaa_layer_embeds)
             iaa_embeds.append(iaa_layer_embeds)
-            all_embeds.append(gnn_layer_embeds + int_layer_embeds + gaa_layer_embeds + iaa_layer_embeds + all_embeds[i])
+            all_embeds.append(gnn_layer_embeds + int_layer_embeds + iaa_layer_embeds + all_embeds[i])
 
         all_embeds = torch.stack(all_embeds, dim=1)
         all_embeds = torch.sum(all_embeds, dim=1, keepdim=False)
         user_embeds, item_embeds = torch.split(all_embeds, [self.user_num, self.item_num], 0)
         self.final_embeds = all_embeds
-        return user_embeds, item_embeds, gnn_embeds, int_embeds, gaa_embeds, iaa_embeds
+        return user_embeds, item_embeds, gnn_embeds, int_embeds, iaa_embeds
 
     def _pick_embeds(self, user_embeds, item_embeds, batch_data):
         ancs, poss, negs = batch_data
@@ -154,50 +144,45 @@ class DCCF_int(BaseModel):
         neg_embeds = item_embeds[negs]
         return anc_embeds, pos_embeds, neg_embeds
 
-    def _cal_cl_loss(self, users, items, gnn_emb, int_emb, gaa_emb, iaa_emb):
+    def _cal_cl_loss(self, users, items, gnn_emb, int_emb, iaa_emb):
         users = torch.unique(users)
         items = torch.unique(items) # different from original SSLRec, remove negative items
         cl_loss = 0.0
         for i in range(len(gnn_emb)):
             u_gnn_embs, i_gnn_embs = torch.split(gnn_emb[i], [self.user_num, self.item_num], 0)
             u_int_embs, i_int_embs = torch.split(int_emb[i], [self.user_num, self.item_num], 0)
-            u_gaa_embs, i_gaa_embs = torch.split(gaa_emb[i], [self.user_num, self.item_num], 0)
             u_iaa_embs, i_iaa_embs = torch.split(iaa_emb[i], [self.user_num, self.item_num], 0)
 
             u_gnn_embs = u_gnn_embs[users]
             u_int_embs = u_int_embs[users]
-            u_gaa_embs = u_gaa_embs[users]
             u_iaa_embs = u_iaa_embs[users]
 
             i_gnn_embs = i_gnn_embs[items]
             i_int_embs = i_int_embs[items]
-            i_gaa_embs = i_gaa_embs[items]
             i_iaa_embs = i_iaa_embs[items]
 
             cl_loss += cal_infonce_loss(u_gnn_embs, u_int_embs, u_int_embs, self.cl_temperature) / u_gnn_embs.shape[0]
-            cl_loss += cal_infonce_loss(u_gnn_embs, u_gaa_embs, u_gaa_embs, self.cl_temperature) / u_gnn_embs.shape[0]
             cl_loss += cal_infonce_loss(u_gnn_embs, u_iaa_embs, u_iaa_embs, self.cl_temperature) / u_gnn_embs.shape[0]
             cl_loss += cal_infonce_loss(i_gnn_embs, i_int_embs, i_int_embs, self.cl_temperature) / u_gnn_embs.shape[0]
-            cl_loss += cal_infonce_loss(i_gnn_embs, i_gaa_embs, i_gaa_embs, self.cl_temperature) / u_gnn_embs.shape[0]
             cl_loss += cal_infonce_loss(i_gnn_embs, i_iaa_embs, i_iaa_embs, self.cl_temperature) / u_gnn_embs.shape[0]
         return cl_loss
 
     def cal_loss(self, batch_data):
         self.is_training = True
-        user_embeds, item_embeds, gnn_embeds, int_embeds, gaa_embeds, iaa_embeds = self.forward()
+        user_embeds, item_embeds, gnn_embeds, int_embeds, iaa_embeds = self.forward()
         ancs, poss, negs = batch_data
         anc_embeds = user_embeds[ancs]
         pos_embeds = item_embeds[poss]
         neg_embeds = item_embeds[negs]
         bpr_loss = cal_bpr_loss(anc_embeds, pos_embeds, neg_embeds) / anc_embeds.shape[0]
         reg_loss = self.reg_weight * reg_params(self)
-        cl_loss = self.cl_weight * self._cal_cl_loss(ancs, poss, gnn_embeds, int_embeds, gaa_embeds, iaa_embeds)
+        cl_loss = self.cl_weight * self._cal_cl_loss(ancs, poss, gnn_embeds, int_embeds, iaa_embeds)
 
         # kd_loss
-        usrprf_embeds = self.mlp(self.usrprf_embeds)
-        itmprf_embeds = self.mlp(self.itmprf_embeds)
-        ancprf_embeds, posprf_embeds, negprf_embeds = self._pick_embeds(usrprf_embeds, itmprf_embeds, batch_data)
-        kd_loss = cal_infonce_loss(anc_embeds, ancprf_embeds, usrprf_embeds, self.kd_temperature) + \
+        user_intent_embeds = self.kd_mlp(self.usrint_embeds)
+        item_intent_embeds = self.kd_mlp(self.itmint_embeds)
+        ancprf_embeds, posprf_embeds, negprf_embeds = self._pick_embeds(user_intent_embeds, item_intent_embeds, batch_data)
+        kd_loss = cal_infonce_loss(anc_embeds, ancprf_embeds, user_intent_embeds, self.kd_temperature) + \
                         cal_infonce_loss(pos_embeds, posprf_embeds, posprf_embeds, self.kd_temperature) + \
                         cal_infonce_loss(neg_embeds, negprf_embeds, negprf_embeds, self.kd_temperature)
         kd_loss /= anc_embeds.shape[0]
@@ -221,7 +206,7 @@ class DCCF_int(BaseModel):
         return loss, losses
 
     def full_predict(self, batch_data):
-        user_embeds, item_embeds, _, _, _, _ = self.forward()
+        user_embeds, item_embeds, _, _, _ = self.forward()
         self.is_training = False
         pck_users, train_mask = batch_data
         pck_users = pck_users.long()
@@ -229,4 +214,3 @@ class DCCF_int(BaseModel):
         full_preds = pck_user_embeds @ item_embeds.T
         full_preds = self._mask_predict(full_preds, train_mask)
         return full_preds
-
