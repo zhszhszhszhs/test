@@ -43,6 +43,8 @@ class DCCF_int(BaseModel):
         self.cl_temperature = self.hyper_config['cl_temperature']
         self.hyper_cl_weight = self.hyper_config['hyper_cl_weight'] if 'hyper_cl_weight' in self.hyper_config else self.cl_weight
         self.hyper_cl_temperature = self.hyper_config['hyper_cl_temperature'] if 'hyper_cl_temperature' in self.hyper_config else self.cl_temperature
+        self.hyper_gnn_cl_weight = self.hyper_config['hyper_gnn_cl_weight'] if 'hyper_gnn_cl_weight' in self.hyper_config else self.cl_weight
+        self.hyper_gnn_cl_temperature = self.hyper_config['hyper_gnn_cl_temperature'] if 'hyper_gnn_cl_temperature' in self.hyper_config else self.cl_temperature
         self.kd_weight = self.hyper_config['kd_weight']
         self.kd_temperature = self.hyper_config['kd_temperature']
         self.kd_int_weight = self.hyper_config['kd_int_weight']
@@ -209,6 +211,23 @@ class DCCF_int(BaseModel):
             hyper_cl_loss += cal_infonce_loss(anc_hyper_embs, pos_hyper_embs, all_hyper_item_embs, self.hyper_cl_temperature) / anc_hyper_embs.shape[0]
         return hyper_cl_loss
 
+    def _cal_hyper_gnn_cl_loss(self, users, items, gnn_emb, hyper_emb):
+        users = torch.unique(users)
+        items = torch.unique(items)
+        hyper_gnn_cl_loss = 0.0
+        for i in range(min(len(gnn_emb), len(hyper_emb))):
+            u_gnn_embs, i_gnn_embs = torch.split(gnn_emb[i], [self.user_num, self.item_num], 0)
+            u_hyper_embs, i_hyper_embs = torch.split(hyper_emb[i], [self.user_num, self.item_num], 0)
+
+            u_gnn_embs = u_gnn_embs[users]
+            u_hyper_embs = u_hyper_embs[users]
+            i_gnn_embs = i_gnn_embs[items]
+            i_hyper_embs = i_hyper_embs[items]
+
+            hyper_gnn_cl_loss += cal_infonce_loss(u_hyper_embs, u_gnn_embs, u_gnn_embs, self.hyper_gnn_cl_temperature) / u_hyper_embs.shape[0]
+            hyper_gnn_cl_loss += cal_infonce_loss(i_hyper_embs, i_gnn_embs, i_gnn_embs, self.hyper_gnn_cl_temperature) / i_hyper_embs.shape[0]
+        return hyper_gnn_cl_loss
+
     def cal_loss(self, batch_data):
         self.is_training = True
         user_embeds, item_embeds, gnn_embeds, int_embeds, hyper_embeds, iaa_embeds = self.forward()
@@ -220,6 +239,7 @@ class DCCF_int(BaseModel):
         reg_loss = self.reg_weight * reg_params(self)
         cl_loss = self.cl_weight * self._cal_cl_loss(ancs, poss, gnn_embeds, int_embeds, iaa_embeds)
         hyper_cl_loss = self.hyper_cl_weight * self._cal_hyper_cl_loss(ancs, poss, negs, hyper_embeds)
+        hyper_gnn_cl_loss = self.hyper_gnn_cl_weight * self._cal_hyper_gnn_cl_loss(ancs, poss, gnn_embeds, hyper_embeds)
 
         # kd_loss
         user_intent_embeds = self.kd_mlp(self.usrint_embeds)
@@ -244,8 +264,8 @@ class DCCF_int(BaseModel):
         kd_int_loss /= anc_int_embeds.shape[0]
         kd_int_loss *= self.kd_int_weight
 
-        loss = bpr_loss + reg_loss + cl_loss + hyper_cl_loss + kd_loss + kd_int_loss
-        losses = {'bpr_loss': bpr_loss, 'reg_loss': reg_loss, 'cl_loss': cl_loss, 'hyper_cl_loss': hyper_cl_loss, 'kd_loss': kd_loss, 'kd_int_loss': kd_int_loss}
+        loss = bpr_loss + reg_loss + cl_loss + hyper_cl_loss + hyper_gnn_cl_loss + kd_loss + kd_int_loss
+        losses = {'bpr_loss': bpr_loss, 'reg_loss': reg_loss, 'cl_loss': cl_loss, 'hyper_cl_loss': hyper_cl_loss, 'hyper_gnn_cl_loss': hyper_gnn_cl_loss, 'kd_loss': kd_loss, 'kd_int_loss': kd_int_loss}
         return loss, losses
 
     def full_predict(self, batch_data):

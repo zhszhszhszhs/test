@@ -4,7 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="fe28e722-7b62-4225-9c95-59023d5ef521" name="更改" comment="" />
+    <list default="true" id="fe28e722-7b62-4225-9c95-59023d5ef521" name="更改" comment="">
+      <change beforePath="$PROJECT_DIR$/encoder/config/modelconf/dccf_int.yml" beforeDir="false" afterPath="$PROJECT_DIR$/encoder/config/modelconf/dccf_int.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/encoder/models/general_cf/dccf_int.py" beforeDir="false" afterPath="$PROJECT_DIR$/encoder/models/general_cf/dccf_int.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
