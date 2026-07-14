@@ -177,9 +177,9 @@ class DCCF_int_nogaa(BaseModel):
         all_embeds = torch.sum(all_embeds, dim=1, keepdim=False)
         llm_embeds = torch.stack(llm_embeds, dim=1)
         llm_embeds = torch.sum(llm_embeds, dim=1, keepdim=False)
-        cf_fusion_embeds = F.normalize(all_embeds, p=2, dim=-1)
-        llm_fusion_embeds = F.normalize(llm_embeds, p=2, dim=-1)
-        all_embeds = cf_fusion_embeds + self.llm_weight * llm_fusion_embeds
+        collaborative_norm = all_embeds.norm(p=2, dim=-1, keepdim=True)
+        all_embeds = F.normalize(all_embeds, p=2, dim=-1) + self.llm_weight * F.normalize(llm_embeds, p=2, dim=-1)
+        all_embeds = collaborative_norm * F.normalize(all_embeds, p=2, dim=-1)
         user_embeds, item_embeds = torch.split(all_embeds, [self.user_num, self.item_num], 0)
         if not self.training:
             self.final_embeds = all_embeds
