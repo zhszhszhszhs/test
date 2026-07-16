@@ -7,9 +7,8 @@ import scipy.sparse as sp
 import torch.nn.functional as F
 
 from config.configurator import configs
-from models.aug_utils import NodeMask
 from models.general_cf.lightgcn import BaseModel
-from models.loss_utils import cal_bpr_loss, reg_params, cal_infonce_loss, ssl_con_loss
+from models.loss_utils import cal_bpr_loss, reg_params, cal_infonce_loss
 
 init = nn.init.xavier_uniform_
 uniformInit = nn.init.uniform
@@ -43,10 +42,6 @@ class DCCF_int_nogaa(BaseModel):
         self.kd_temperature = self.hyper_config['kd_temperature']
         self.kd_int_weight = self.hyper_config['kd_int_weight']
         self.kd_int_temperature = self.hyper_config['kd_int_temperature']
-        self.llm_weight = self.hyper_config['llm_weight']
-        self.mask_ratio = self.hyper_config['mask_ratio']
-        self.recon_weight = self.hyper_config['recon_weight']
-        self.re_temperature = self.hyper_config['re_temperature']
 
         # model parameters
         self.user_embeds = nn.Embedding(self.user_num, self.embedding_size)
@@ -54,8 +49,9 @@ class DCCF_int_nogaa(BaseModel):
         self.user_intent = torch.nn.Parameter(init(torch.empty(self.embedding_size, self.intent_num)), requires_grad=True)
         self.item_intent = torch.nn.Parameter(init(torch.empty(self.embedding_size, self.intent_num)), requires_grad=True)
 
-        # Cache only clean evaluation embeddings; training views are masked.
-        self.final_embeds = None
+        # train/test
+        self.is_training = True
+        self.final_embeds = False
 
         # intent information
         self.usrint_embeds = torch.tensor(configs['usrint_embeds']).float().cuda()
@@ -70,17 +66,6 @@ class DCCF_int_nogaa(BaseModel):
             nn.LeakyReLU(),
             nn.Linear((self.usrint_embeds.shape[1] + self.embedding_size) // 2, self.embedding_size)
         )
-        self.llm_mlp = nn.Sequential(
-            nn.Linear(self.usrint_embeds.shape[1], (self.usrint_embeds.shape[1] + self.embedding_size) // 2),
-            nn.LeakyReLU(),
-            nn.Linear((self.usrint_embeds.shape[1] + self.embedding_size) // 2, self.embedding_size)
-        )
-        self.llm_masker = NodeMask(self.mask_ratio, self.embedding_size)
-        self.llm_recon_mlp = nn.Sequential(
-            nn.Linear(self.embedding_size, (self.usrint_embeds.shape[1] + self.embedding_size) // 2),
-            nn.LeakyReLU(),
-            nn.Linear((self.usrint_embeds.shape[1] + self.embedding_size) // 2, self.usrint_embeds.shape[1])
-        )
         # self.int_mlp = MoE(
         #     input_size=self.usrint_embeds.shape[1],
         #     output_size=self.embedding_size,
@@ -94,12 +79,6 @@ class DCCF_int_nogaa(BaseModel):
             if isinstance(m, nn.Linear):
                 init(m.weight)
         for m in self.kd_mlp:
-            if isinstance(m, nn.Linear):
-                init(m.weight)
-        for m in self.llm_mlp:
-            if isinstance(m, nn.Linear):
-                init(m.weight)
-        for m in self.llm_recon_mlp:
             if isinstance(m, nn.Linear):
                 init(m.weight)
         init(self.user_embeds.weight)
@@ -124,20 +103,10 @@ class DCCF_int_nogaa(BaseModel):
         return G_indices, G_values
 
     def forward(self):
-        if self.training:
-            self.final_embeds = None
-        elif self.final_embeds is not None:
-            return self.final_embeds[:self.user_num], self.final_embeds[self.user_num:], None, None, None, None, None
+        if not self.is_training and self.final_embeds is not None:
+            return self.final_embeds[:self.user_num], self.final_embeds[self.user_num:], None, None, None
 
         all_embeds = [torch.concat([self.user_embeds.weight, self.item_embeds.weight], dim=0)]
-        llm_init_embeds = torch.concat([
-            self.llm_mlp(self.usrint_embeds),
-            self.llm_mlp(self.itmint_embeds)
-        ], dim=0)
-        llm_seeds = None
-        if self.training:
-            llm_init_embeds, llm_seeds = self.llm_masker(llm_init_embeds)
-        llm_embeds = [llm_init_embeds]
         gnn_embeds, int_embeds, iaa_embeds = [], [], []
 
         for i in range(0, self.layer_num):
@@ -150,40 +119,23 @@ class DCCF_int_nogaa(BaseModel):
             i_int_embeds = torch.softmax(i_embeds @ self.item_intent, dim=1) @ self.item_intent.T
             int_layer_embeds = torch.concat([u_int_embeds, i_int_embeds], dim=0)
 
-            # Intent-aware Adaptive Augmentation
+            # Adaptive Augmentation
             int_head_embeds = torch.index_select(int_layer_embeds, 0, self.all_h_list)
             int_tail_embeds = torch.index_select(int_layer_embeds, 0, self.all_t_list)
             G_inten_indices, G_inten_values = self._adaptive_mask(int_head_embeds, int_tail_embeds)
             iaa_layer_embeds = torch_sparse.spmm(G_inten_indices, G_inten_values, self.A_in_shape[0], self.A_in_shape[1], all_embeds[i])
-
-            # Propagate the masked LLM intent view over the same IAA graph,
-            # rather than over the complete normalized user-item graph.
-            llm_layer_embeds = torch_sparse.spmm(
-                G_inten_indices,
-                G_inten_values,
-                self.A_in_shape[0],
-                self.A_in_shape[1],
-                llm_embeds[i]
-            )
 
             # Aggregation
             gnn_embeds.append(gnn_layer_embeds)
             int_embeds.append(int_layer_embeds)
             iaa_embeds.append(iaa_layer_embeds)
             all_embeds.append(gnn_layer_embeds + int_layer_embeds + iaa_layer_embeds + all_embeds[i])
-            llm_embeds.append(llm_layer_embeds)
 
         all_embeds = torch.stack(all_embeds, dim=1)
         all_embeds = torch.sum(all_embeds, dim=1, keepdim=False)
-        llm_embeds = torch.stack(llm_embeds, dim=1)
-        llm_embeds = torch.sum(llm_embeds, dim=1, keepdim=False)
-        collaborative_norm = all_embeds.norm(p=2, dim=-1, keepdim=True)
-        all_embeds = F.normalize(all_embeds, p=2, dim=-1) + self.llm_weight * F.normalize(llm_embeds, p=2, dim=-1)
-        all_embeds = collaborative_norm * F.normalize(all_embeds, p=2, dim=-1)
         user_embeds, item_embeds = torch.split(all_embeds, [self.user_num, self.item_num], 0)
-        if not self.training:
-            self.final_embeds = all_embeds
-        return user_embeds, item_embeds, gnn_embeds, int_embeds, iaa_embeds, llm_embeds, llm_seeds
+        self.final_embeds = all_embeds
+        return user_embeds, item_embeds, gnn_embeds, int_embeds, iaa_embeds
 
     def _pick_embeds(self, user_embeds, item_embeds, batch_data):
         ancs, poss, negs = batch_data
@@ -215,19 +167,9 @@ class DCCF_int_nogaa(BaseModel):
             cl_loss += cal_infonce_loss(i_gnn_embs, i_iaa_embs, i_iaa_embs, self.cl_temperature) / u_gnn_embs.shape[0]
         return cl_loss
 
-    def _reconstruction(self, llm_embeds, seeds):
-        reconstructed_embeds = self.llm_recon_mlp(llm_embeds[seeds])
-        user_seed_mask = seeds < self.user_num
-        target_embeds = self.usrint_embeds.new_empty(
-            (seeds.shape[0], self.usrint_embeds.shape[1])
-        )
-        target_embeds[user_seed_mask] = self.usrint_embeds[seeds[user_seed_mask]]
-        item_seeds = seeds[~user_seed_mask] - self.user_num
-        target_embeds[~user_seed_mask] = self.itmint_embeds[item_seeds]
-        return ssl_con_loss(reconstructed_embeds, target_embeds, self.re_temperature)
-
     def cal_loss(self, batch_data):
-        user_embeds, item_embeds, gnn_embeds, int_embeds, iaa_embeds, llm_embeds, llm_seeds = self.forward()
+        self.is_training = True
+        user_embeds, item_embeds, gnn_embeds, int_embeds, iaa_embeds = self.forward()
         ancs, poss, negs = batch_data
         anc_embeds = user_embeds[ancs]
         pos_embeds = item_embeds[poss]
@@ -259,22 +201,13 @@ class DCCF_int_nogaa(BaseModel):
         kd_int_loss /= anc_int_embeds.shape[0]
         kd_int_loss *= self.kd_int_weight
 
-        # Reconstruct the original LLM intent/profile vectors only for masked nodes.
-        recon_loss = self.recon_weight * self._reconstruction(llm_embeds, llm_seeds)
-
-        loss = bpr_loss + reg_loss + cl_loss + kd_loss + kd_int_loss + recon_loss
-        losses = {
-            'bpr_loss': bpr_loss,
-            'reg_loss': reg_loss,
-            'cl_loss': cl_loss,
-            'kd_loss': kd_loss,
-            'kd_int_loss': kd_int_loss,
-            'recon_loss': recon_loss
-        }
+        loss = bpr_loss + reg_loss + cl_loss + kd_loss + kd_int_loss
+        losses = {'bpr_loss': bpr_loss, 'reg_loss': reg_loss, 'cl_loss': cl_loss, 'kd_loss': kd_loss, 'kd_int_loss': kd_int_loss}
         return loss, losses
 
     def full_predict(self, batch_data):
-        user_embeds, item_embeds, _, _, _, _, _ = self.forward()
+        user_embeds, item_embeds, _, _, _ = self.forward()
+        self.is_training = False
         pck_users, train_mask = batch_data
         pck_users = pck_users.long()
         pck_user_embeds = user_embeds[pck_users]
