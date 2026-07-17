@@ -70,6 +70,10 @@ def parse_configure(model=None, dataset=None):
         with open(itmint_embeds_path, 'rb') as f:
             configs['itmint_embeds'] = pickle.load(f)
 
+        if 'llm_intent_prototype_file' in configs['model']:
+            prototype_path = os.path.join(data_dir, configs['model']['llm_intent_prototype_file'])
+            configs['llm_intent_prototypes'] = np.load(prototype_path, allow_pickle=False)
+
         return configs
 
 configs = parse_configure()

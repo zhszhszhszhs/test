@@ -37,6 +37,12 @@ model:
   kd_int_weight: 1.0e-2
   kd_temperature: 0.5
   kd_int_temperature: 0.2
+  llm_intent_prototype_file: item_intent_prototypes_128.npy
+  llm_lightgcn_layers: 2
+  llm_topk: 5
+  llm_intent_weight: 0.1
+  llm_bpr_weight: 1.0
+  llm_score_weight: 0.3
   # for amazon
   amazon:
     layer_num: 2
