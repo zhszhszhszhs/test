@@ -62,17 +62,19 @@ def parse_configure(model=None, dataset=None):
         with open(itmprf_embeds_path, 'rb') as f:
             configs['itmprf_embeds'] = pickle.load(f)
         #
-        # # intent embeddings
+        # # LLM-derived semantic embeddings
         usrint_embeds_path = os.path.join(data_dir, 'user_intent_emb_3.pkl')
         itmint_embeds_path = os.path.join(data_dir, 'item_intent_emb_3.pkl')
         with open(usrint_embeds_path, 'rb') as f:
-            configs['usrint_embeds'] = pickle.load(f)
+            configs['user_semantic_embeds'] = pickle.load(f)
         with open(itmint_embeds_path, 'rb') as f:
-            configs['itmint_embeds'] = pickle.load(f)
+            configs['item_semantic_embeds'] = pickle.load(f)
+        configs['usrint_embeds'] = configs['user_semantic_embeds']
+        configs['itmint_embeds'] = configs['item_semantic_embeds']
 
-        if 'llm_intent_prototype_file' in configs['model']:
-            prototype_path = os.path.join(data_dir, configs['model']['llm_intent_prototype_file'])
-            configs['llm_intent_prototypes'] = np.load(prototype_path, allow_pickle=False)
+        if 'semantic_intent_prototype_file' in configs['model']:
+            prototype_path = os.path.join(data_dir, configs['model']['semantic_intent_prototype_file'])
+            configs['semantic_intent_prototypes'] = np.load(prototype_path, allow_pickle=False)
 
         return configs
 

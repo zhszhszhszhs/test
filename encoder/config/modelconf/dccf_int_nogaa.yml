@@ -26,7 +26,7 @@ model:
   name: dccf_int_nogaa
   # general parameters here
   embedding_size: 32
-  intent_num: 128
+  collaborative_intent_num: 128
 
   # data-specific parameters here
   layer_num: 2
@@ -37,12 +37,12 @@ model:
   kd_int_weight: 1.0e-2
   kd_temperature: 0.5
   kd_int_temperature: 0.2
-  llm_intent_prototype_file: item_intent_prototypes_128.npy
-  llm_lightgcn_layers: 2
-  llm_topk: 5
-  llm_intent_weight: 0.1
-  llm_bpr_weight: 1.0
-  llm_score_weight: 0.3
+  semantic_intent_prototype_file: item_intent_prototypes_128.npy
+  semantic_lightgcn_layer_num: 2
+  semantic_topm: 5
+  semantic_message_weight: 0.1
+  semantic_bpr_weight: 1.0
+  semantic_score_weight: 0.1
   # for amazon
   amazon:
     layer_num: 2
@@ -53,8 +53,6 @@ model:
     kd_temperature: 0.5
     kd_int_weight: 2.0e-2
     kd_int_temperature: 0.1
-    kd_int_weight_2: 5.0e-4
-    kd_int_weight_3: 1.0e-4
   # for yelp
   yelp:
     layer_num: 2
@@ -65,8 +63,6 @@ model:
     kd_temperature: 0.2
     kd_int_weight: 1.0e-2
     kd_int_temperature: 0.2
-    kd_int_weight_2: 1.0e-3
-    kd_int_weight_3: 1.0e-4
   # for movie
   movie:
     layer_num: 3
@@ -77,5 +73,3 @@ model:
     kd_temperature: 0.1
     kd_int_weight: 5.0e-2
     kd_int_temperature: 0.2
-    kd_int_weight_2: 1.0e-3
-    kd_int_weight_3: 1.0e-4
