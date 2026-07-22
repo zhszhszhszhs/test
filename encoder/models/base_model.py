@@ -15,8 +15,9 @@ class BaseModel(nn.Module):
         self.embedding_size = configs['model']['embedding_size']
 
         # hyper-parameter
-        if configs['data']['name'] in configs['model']:
-            self.hyper_config = configs['model'][configs['data']['name']]
+        base_dataset = configs['data'].get('base_name', configs['data']['name'])
+        if base_dataset in configs['model']:
+            self.hyper_config = configs['model'][base_dataset]
         else:
             self.hyper_config = configs['model']
 

@@ -1,10 +1,9 @@
 import os
 import yaml
-import torch
 import pickle
 import argparse
+import json
 import numpy as np
-import torch.nn as nn
 
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'modelconf')
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
@@ -55,6 +54,14 @@ def parse_configure(model=None, dataset=None):
 
         # semantic embeddings
         data_dir = os.path.join(DATA_DIR, configs['data']['name'])
+        split_metadata_path = os.path.join(data_dir, 'split_meta.json')
+        configs['data']['base_name'] = configs['data']['name']
+        if os.path.exists(split_metadata_path):
+            with open(split_metadata_path, encoding='utf-8') as f:
+                split_metadata = json.load(f)
+            configs['data']['base_name'] = split_metadata.get(
+                'source_dataset', configs['data']['name'])
+
         usrprf_embeds_path = os.path.join(data_dir, 'usr_emb_np.pkl')
         itmprf_embeds_path = os.path.join(data_dir, 'itm_emb_np.pkl')
         with open(usrprf_embeds_path, 'rb') as f:

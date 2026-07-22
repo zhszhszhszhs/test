@@ -35,8 +35,9 @@ class Tuner(object):
             now_para[para_name] = seleted_val
             now_para_str += '{}{}'.format(para_name, seleted_val)
             configs['model'][para_name] = seleted_val
-            if configs['data']['name'] in configs['model']:
-                configs['model'][configs['data']['name']][para_name] = seleted_val
+            base_dataset = configs['data'].get('base_name', configs['data']['name'])
+            if base_dataset in configs['model']:
+                configs['model'][base_dataset][para_name] = seleted_val
         configs['tune']['now_para_str'] = now_para_str
         self.logger.log('hyperparameter: {}'.format(now_para))
         model = build_model(data_handler).cuda()
@@ -51,4 +52,3 @@ class Tuner(object):
             torch.cuda.empty_cache()
             self.step()
         configs['model'] = self.origin_model_para.copy()
-

@@ -13,16 +13,9 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
 
 class DataHandlerGeneralCF:
     def __init__(self):
-        if configs['data']['name'] == 'amazon':
-            predir = os.path.join(DATA_DIR, 'amazon')
-        elif configs['data']['name'] == 'yelp':
-            predir = os.path.join(DATA_DIR, 'yelp')
-        elif configs['data']['name'] == 'steam':
-            predir = os.path.join(DATA_DIR, 'steam')
-        elif configs['data']['name'] == 'movie':
-            predir = os.path.join(DATA_DIR, 'movie')
-        else:
-            raise NotImplementedError
+        predir = os.path.join(DATA_DIR, configs['data']['name'])
+        if not os.path.isdir(predir):
+            raise FileNotFoundError('Dataset directory does not exist: {}'.format(predir))
         self.trn_file = os.path.join(predir, 'trn_mat.pkl')
         self.val_file = os.path.join(predir, 'val_mat.pkl')
         self.tst_file = os.path.join(predir, 'tst_mat.pkl')
